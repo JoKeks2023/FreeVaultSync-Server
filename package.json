@@ -2,7 +2,7 @@
   "name": "@freevaultsync/server",
   "version": "0.1.0",
   "private": true,
-  "main": "dist/index.js",
+  "main": "server/dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only server/src/index.ts",
     "build": "tsc -p server/tsconfig.json",

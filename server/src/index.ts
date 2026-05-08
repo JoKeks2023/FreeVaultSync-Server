@@ -1,7 +1,9 @@
 import { createApp } from "./app";
 import { loadConfig } from "./config";
+import { initDB } from "./db";
 
 const config = loadConfig();
+initDB();
 const app = createApp();
 
 app.listen(config.port, () => {
