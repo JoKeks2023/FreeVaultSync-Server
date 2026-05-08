@@ -1,0 +1,27 @@
+services:
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      OIDC_ISSUER_URL: https://your-idp.example.com
+      OIDC_CLIENT_ID: freevaultsync
+      OIDC_CLIENT_SECRET: change-me
+      ENCRYPTION_ENABLED: "false"
+    volumes:
+      - ./data/vault:/data/vault
+      - ./data/db:/data/db
+  admin:
+    build: ./admin
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://server:3000
+  editor:
+    build: ./editor
+    ports:
+      - "5174:5174"
+    environment:
+      VITE_API_URL: http://server:3000

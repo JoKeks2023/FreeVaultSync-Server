@@ -1,0 +1,25 @@
+{
+  "name": "@freevaultsync/server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only server/src/index.ts",
+    "build": "tsc -p server/tsconfig.json",
+    "start": "node server/dist/index.js",
+    "dev:server": "npm run dev"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "better-sqlite3": "^8.5.0"
+  },
+  "devDependencies": {
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.8.3",
+    "@types/express": "^5.0.2",
+    "@types/node": "^22.15.29"
+  }
+  ,"engines": {
+    "node": ">=20 <21"
+  }
+}
