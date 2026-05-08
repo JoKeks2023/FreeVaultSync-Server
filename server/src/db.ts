@@ -23,7 +23,7 @@ export type VersionRow = {
   created_by?: string | null;
 };
 
-let db: Database.Database | null = null;
+let db: any = null;
 
 export function initDB() {
   if (db) return;
