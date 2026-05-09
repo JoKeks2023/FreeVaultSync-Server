@@ -5,7 +5,20 @@ import {
   listFiles,
   listVersions,
   upsertFile,
+  listBackupDestinations,
+  updateBackupLastTime,
 } from "./db";
+import {
+  saveFile,
+  readFile,
+  deleteFile,
+  fileExists,
+  validatePath,
+  ensureVaultDir,
+} from "./fileStore";
+import { BackupOrchestrator } from "./backup/backup";
+import BackupConfigStore from "./backupConfig";
+import crypto from "crypto";
 
 type PutFileBody = {
   checksum?: string;
@@ -13,10 +26,29 @@ type PutFileBody = {
   updatedBy?: string;
 };
 
+type FileResponse = {
+  path: string;
+  checksum: string;
+  size: number;
+  updated_at: number;
+  updated_by?: string | null;
+  content?: string;
+};
+
+/**
+ * Calculate SHA256 checksum of content
+ */
+function calculateChecksum(content: string): string {
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
 export function createApp() {
   const app = express();
 
   app.use(express.json());
+
+  // Ensure vault directory exists on startup
+  ensureVaultDir();
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok", service: "freevaultsync-server" });
@@ -50,13 +82,26 @@ export function createApp() {
       return;
     }
 
+    if (!validatePath(filePath)) {
+      response.status(400).json({ error: "Invalid file path" });
+      return;
+    }
+
     const file = getFile(filePath);
     if (!file) {
       response.status(404).json({ error: "File not found" });
       return;
     }
 
-    response.json(file);
+    // Read file content from disk
+    const content = readFile(filePath);
+
+    const fileResponse: FileResponse = {
+      ...file,
+      content: content ?? undefined,
+    };
+
+    response.json(fileResponse);
   });
 
   app.put("/vault/files/:path(*)", (request, response) => {
@@ -68,38 +113,96 @@ export function createApp() {
       return;
     }
 
-    if (!body.checksum) {
-      response.status(400).json({ error: "Missing checksum" });
+    if (!validatePath(filePath)) {
+      response.status(400).json({ error: "Invalid file path" });
+      return;
+    }
+
+    if (!body.content) {
+      response.status(400).json({ error: "Missing file content" });
       return;
     }
 
     const now = Date.now();
-    const size = body.content ? Buffer.byteLength(body.content, "utf8") : 0;
     const updatedBy = body.updatedBy ?? "unknown";
 
-    upsertFile({
-      path: filePath,
-      checksum: body.checksum,
-      size,
-      updated_at: now,
-      updated_by: updatedBy,
-    });
+    // Calculate checksum from actual content if not provided
+    const checksum = body.checksum ?? calculateChecksum(body.content);
 
-    insertVersion({
-      path: filePath,
-      checksum: body.checksum,
-      diff: null,
-      snapshot: 1,
-      created_at: now,
-      created_by: updatedBy,
-    });
+    // Save file to disk
+    try {
+      const fileMetadata = saveFile(filePath, body.content, updatedBy);
 
-    response.status(200).json({
-      status: "ok",
-      path: filePath,
-      checksum: body.checksum,
-      updated_at: now,
-    });
+      // Update database with metadata
+      upsertFile({
+        path: filePath,
+        checksum: checksum,
+        size: fileMetadata.size,
+        updated_at: now,
+        updated_by: updatedBy,
+      });
+
+      // Insert version entry
+      insertVersion({
+        path: filePath,
+        checksum: checksum,
+        diff: null,
+        snapshot: 1,
+        created_at: now,
+        created_by: updatedBy,
+      });
+
+      response.status(200).json({
+        status: "ok",
+        path: filePath,
+        checksum: checksum,
+        size: fileMetadata.size,
+        updated_at: now,
+        updated_by: updatedBy,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      response.status(500).json({
+        error: "Failed to save file",
+        detail: message,
+      });
+    }
+  });
+
+  app.delete("/vault/files/:path(*)", (request, response) => {
+    const filePath = getPathFromParams(request.params as Record<string, string | undefined>);
+
+    if (!filePath) {
+      response.status(400).json({ error: "Missing file path" });
+      return;
+    }
+
+    if (!validatePath(filePath)) {
+      response.status(400).json({ error: "Invalid file path" });
+      return;
+    }
+
+    try {
+      const exists = fileExists(filePath);
+      if (!exists) {
+        response.status(404).json({ error: "File not found" });
+        return;
+      }
+
+      deleteFile(filePath);
+
+      response.status(200).json({
+        status: "ok",
+        path: filePath,
+        deleted_at: Date.now(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      response.status(500).json({
+        error: "Failed to delete file",
+        detail: message,
+      });
+    }
   });
 
   app.get("/vault/history/:path(*)", (request, response) => {
@@ -109,10 +212,127 @@ export function createApp() {
       return;
     }
 
+    if (!validatePath(filePath)) {
+      response.status(400).json({ error: "Invalid file path" });
+      return;
+    }
+
     response.json({
       path: filePath,
       versions: listVersions(filePath),
     });
+  });
+
+  // ========== BACKUP API ==========
+
+  app.get("/api/backup/destinations", (_request, response) => {
+    try {
+      const destinations = listBackupDestinations();
+      response.json({
+        status: "ok",
+        destinations: destinations.map((d) => ({
+          id: d.id,
+          provider: d.provider,
+          enabled: d.enabled === 1,
+          lastBackup: d.last_backup,
+        })),
+      });
+    } catch (error) {
+      response.status(500).json({ error: "Failed to list backup destinations" });
+    }
+  });
+
+  app.post("/api/backup/test/:destinationId", async (request, response) => {
+    try {
+      const { destinationId } = request.params;
+      const destinations = listBackupDestinations();
+      const destination = destinations.find((d) => d.id === destinationId);
+
+      if (!destination) {
+        response.status(404).json({ error: "Destination not found" });
+        return;
+      }
+
+      const provider = BackupConfigStore.initializeProvider(destination as any);
+      if (!provider) {
+        response.status(400).json({ error: "Failed to initialize provider" });
+        return;
+      }
+
+      const isAuthenticated = await provider.verify();
+      if (!isAuthenticated) {
+        response.status(401).json({ error: "Authentication failed" });
+        return;
+      }
+
+      const status = await provider.getStatus();
+      response.json({ status: "ok", provider: destination.provider, message: status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      response.status(500).json({ error: message });
+    }
+  });
+
+  app.post("/api/backup/execute", async (_request, response) => {
+    try {
+      console.log("[API] Starting manual backup...");
+
+      const backupOrchestrator = new BackupOrchestrator();
+      const providers = BackupConfigStore.getConfiguredProviders();
+
+      if (providers.size === 0) {
+        response.status(400).json({ error: "No backup providers configured" });
+        return;
+      }
+
+      const encryptionEnabled = process.env.BACKUP_ENCRYPTION === "true";
+      const results = await backupOrchestrator.executeBackup(providers, encryptionEnabled);
+
+      // Update last backup timestamp
+      for (const [destId] of providers) {
+        updateBackupLastTime(destId, Date.now());
+      }
+
+      response.json({
+        status: "ok",
+        message: "Backup completed",
+        results: Array.from(results.entries()).map(([providerId, result]) => ({
+          provider: providerId,
+          backupId: result.backupId,
+          fileSize: result.fileSize,
+          uploadedAt: result.uploadedAt,
+          backupUrl: result.backupUrl,
+        })),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      console.error("[API] Backup failed:", message);
+      response.status(500).json({ error: message });
+    }
+  });
+
+  app.get("/api/backup/status", async (_request, response) => {
+    try {
+      const destinations = listBackupDestinations();
+      const statusPromises = destinations.map(async (d) => {
+        const provider = BackupConfigStore.initializeProvider(d as any);
+        if (!provider) {
+          return { id: d.id, provider: d.provider, status: "error", message: "Failed to initialize" };
+        }
+
+        try {
+          const status = await provider.getStatus();
+          return { id: d.id, provider: d.provider, status: "ok", message: status };
+        } catch (error) {
+          return { id: d.id, provider: d.provider, status: "error", message: (error as Error).message };
+        }
+      });
+
+      const statuses = await Promise.all(statusPromises);
+      response.json({ status: "ok", providers: statuses });
+    } catch (error) {
+      response.status(500).json({ error: "Failed to get backup status" });
+    }
   });
 
   return app;

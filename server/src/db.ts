@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
+// Use environment variables or defaults
 const DEFAULT_DB_DIR = process.env.DB_DIR ?? path.resolve(process.cwd(), "data/db");
 const DEFAULT_DB_FILE = process.env.DB_FILE ?? path.join(DEFAULT_DB_DIR, "freevault.db");
 
@@ -11,6 +12,10 @@ export type FileRow = {
   size: number;
   updated_at: number;
   updated_by?: string | null;
+};
+
+export type FileRowWithContent = FileRow & {
+  content?: string;
 };
 
 export type VersionRow = {
@@ -123,6 +128,62 @@ export function listVersions(pathName: string): VersionRow[] {
   return stmt.all(pathName);
 }
 
+// Backup destination management
+export type BackupDestinationRow = {
+  id: string;
+  provider: string;
+  access_token?: string;
+  refresh_token?: string;
+  tenant_id?: string;
+  site_id?: string;
+  bucket_name?: string;
+  region?: string;
+  secret_access_key?: string;
+  last_backup?: number;
+  enabled: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export function upsertBackupDestination(row: Partial<BackupDestinationRow>) {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    INSERT INTO backup_destinations (id, provider, access_token, refresh_token, last_backup, enabled)
+    VALUES (@id, @provider, @access_token, @refresh_token, @last_backup, @enabled)
+    ON CONFLICT(id) DO UPDATE SET
+      provider=excluded.provider,
+      access_token=excluded.access_token,
+      refresh_token=excluded.refresh_token,
+      last_backup=excluded.last_backup,
+      enabled=excluded.enabled
+  `);
+  return stmt.run(row);
+}
+
+export function getBackupDestination(id: string): BackupDestinationRow | undefined {
+  if (!db) initDB();
+  const stmt = db!.prepare("SELECT * FROM backup_destinations WHERE id = ?");
+  return stmt.get(id);
+}
+
+export function listBackupDestinations(): BackupDestinationRow[] {
+  if (!db) initDB();
+  const stmt = db!.prepare("SELECT * FROM backup_destinations ORDER BY created_at DESC");
+  return stmt.all();
+}
+
+export function deleteBackupDestination(id: string): void {
+  if (!db) initDB();
+  const stmt = db!.prepare("DELETE FROM backup_destinations WHERE id = ?");
+  stmt.run(id);
+}
+
+export function updateBackupLastTime(id: string, timestamp: number): void {
+  if (!db) initDB();
+  const stmt = db!.prepare("UPDATE backup_destinations SET last_backup = ? WHERE id = ?");
+  stmt.run(timestamp, id);
+}
+
 export default {
   initDB,
   listFiles,
@@ -130,4 +191,9 @@ export default {
   upsertFile,
   insertVersion,
   listVersions,
+  upsertBackupDestination,
+  getBackupDestination,
+  listBackupDestinations,
+  deleteBackupDestination,
+  updateBackupLastTime,
 };

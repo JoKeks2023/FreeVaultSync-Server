@@ -10,16 +10,23 @@
     "dev:server": "npm run dev"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@azure/msal-node": "^5.2.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "archiver": "^8.0.0",
+    "better-sqlite3": "^8.5.0",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
-    "better-sqlite3": "^8.5.0"
+    "googleapis": "^171.4.0"
   },
   "devDependencies": {
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.8.3",
+    "@types/archiver": "^7.0.0",
     "@types/express": "^5.0.2",
-    "@types/node": "^22.15.29"
-  }
-  ,"engines": {
+    "@types/node": "^22.15.29",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
     "node": ">=20 <21"
   }
 }

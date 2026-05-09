@@ -1,11 +1,47 @@
+version: '3.8'
+
 services:
-  server:
+  freevaultsync-server:
     build: ./server
+    container_name: freevaultsync
     ports:
       - "3000:3000"
     environment:
       NODE_ENV: production
       PORT: 3000
+
+      # Dateispeicher (FreeVaultSync bevorzugt Storage-Backend)
+      # Standardmäßig: ./data/vault
+      # In Docker: /data/vault (mapped via volume oder bind-mount)
+      VAULT_DIR: /data/vault
+
+      # SQLite Datenbank
+      DB_DIR: /data/db
+      DB_FILE: freevault.db
+
     volumes:
-      - ./data/vault:/data/vault
-      - ./data/db:/data/db
+      # OPTION 1 (Empfohlen für Produktion):
+      # Named Volumes – Docker verwaltet Storage-Location
+      - vault_data:/data/vault
+      - db_data:/data/db
+
+      # OPTION 2 (für Entwicklung/Backups):
+      # Bind-Mounts – Dateien liegen auf Host
+      # Ersetze die Zeilen oben mit:
+      # - /home/user/freevault:/data/vault
+      # - /home/user/freevault-backups:/data/db
+      # und stelle sicher, dass die Ordner existieren: mkdir -p
+
+    restart: unless-stopped
+    networks:
+      - freevault
+
+volumes:
+  vault_data:
+    driver: local
+  db_data:
+    driver: local
+
+networks:
+  freevault:
+    driver: bridge
