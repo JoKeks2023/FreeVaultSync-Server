@@ -7,7 +7,9 @@
     "dev": "ts-node-dev --respawn --transpile-only server/src/index.ts",
     "build": "tsc -p server/tsconfig.json",
     "start": "node server/dist/index.js",
-    "dev:server": "npm run dev"
+    "dev:server": "npm run dev",
+    "build:admin": "npm --prefix admin run build",
+    "dev:admin": "npm --prefix admin run dev"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",

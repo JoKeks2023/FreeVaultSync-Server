@@ -28,6 +28,27 @@ export type VersionRow = {
   created_by?: string | null;
 };
 
+export type DeviceRow = {
+  id: string;
+  name?: string | null;
+  platform?: string | null;
+  device_type?: string | null;
+  model?: string | null;
+  last_seen?: number | null;
+  last_sync?: number | null;
+};
+
+export type AdminStatsRow = {
+  files: number;
+  versions: number;
+  devices: number;
+  backup_destinations: number;
+  sync_events: number;
+  storage_bytes: number;
+  last_file_update_at: number | null;
+  last_sync_at: number | null;
+};
+
 let db: any = null;
 
 export function initDB() {
@@ -63,6 +84,8 @@ export function initDB() {
       id TEXT PRIMARY KEY,
       name TEXT,
       platform TEXT,
+      device_type TEXT,
+      model TEXT,
       last_seen INTEGER,
       last_sync INTEGER
     );
@@ -85,6 +108,19 @@ export function initDB() {
       enabled INTEGER DEFAULT 0
     );
   `);
+
+  const deviceColumns = [
+    ["device_type", "TEXT"],
+    ["model", "TEXT"],
+  ] as const;
+
+  for (const [columnName, columnType] of deviceColumns) {
+    try {
+      db!.prepare(`ALTER TABLE devices ADD COLUMN ${columnName} ${columnType}`).run();
+    } catch {
+      // Column already exists or migration was applied earlier.
+    }
+  }
 }
 
 export function listFiles(): FileRow[] {
@@ -126,6 +162,86 @@ export function listVersions(pathName: string): VersionRow[] {
   if (!db) initDB();
   const stmt = db!.prepare("SELECT id, path, checksum, diff, snapshot, created_at, created_by FROM versions WHERE path = ? ORDER BY created_at DESC");
   return stmt.all(pathName);
+}
+
+export function listDevices(): DeviceRow[] {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    SELECT id, name, platform, device_type, model, last_seen, last_sync
+    FROM devices
+    ORDER BY COALESCE(last_seen, 0) DESC, id ASC
+  `);
+  return stmt.all();
+}
+
+export function getDevice(id: string): DeviceRow | undefined {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    SELECT id, name, platform, device_type, model, last_seen, last_sync
+    FROM devices
+    WHERE id = ?
+  `);
+  return stmt.get(id);
+}
+
+export function upsertDevice(row: DeviceRow) {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    INSERT INTO devices (id, name, platform, device_type, model, last_seen, last_sync)
+    VALUES (@id, @name, @platform, @device_type, @model, @last_seen, @last_sync)
+    ON CONFLICT(id) DO UPDATE SET
+      name=excluded.name,
+      platform=excluded.platform,
+      device_type=excluded.device_type,
+      model=excluded.model,
+      last_seen=excluded.last_seen,
+      last_sync=excluded.last_sync
+  `);
+  return stmt.run(row);
+}
+
+export function touchDevice(id: string, timestamp: number = Date.now()) {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    UPDATE devices
+    SET last_seen = ?
+    WHERE id = ?
+  `);
+  return stmt.run(timestamp, id);
+}
+
+export function markDeviceSync(id: string, timestamp: number = Date.now()) {
+  if (!db) initDB();
+  const stmt = db!.prepare(`
+    UPDATE devices
+    SET last_sync = ?, last_seen = ?
+    WHERE id = ?
+  `);
+  return stmt.run(timestamp, timestamp, id);
+}
+
+export function listAdminStats(): AdminStatsRow {
+  if (!db) initDB();
+
+  const filesCount = db!.prepare("SELECT COUNT(*) AS value FROM files").get() as { value: number };
+  const versionsCount = db!.prepare("SELECT COUNT(*) AS value FROM versions").get() as { value: number };
+  const devicesCount = db!.prepare("SELECT COUNT(*) AS value FROM devices").get() as { value: number };
+  const backupCount = db!.prepare("SELECT COUNT(*) AS value FROM backup_destinations").get() as { value: number };
+  const syncEventsCount = db!.prepare("SELECT COUNT(*) AS value FROM sync_log").get() as { value: number };
+  const storageBytes = db!.prepare("SELECT COALESCE(SUM(size), 0) AS value FROM files").get() as { value: number };
+  const lastFileUpdate = db!.prepare("SELECT MAX(updated_at) AS value FROM files").get() as { value: number | null };
+  const lastSyncAt = db!.prepare("SELECT MAX(last_sync) AS value FROM devices").get() as { value: number | null };
+
+  return {
+    files: filesCount.value ?? 0,
+    versions: versionsCount.value ?? 0,
+    devices: devicesCount.value ?? 0,
+    backup_destinations: backupCount.value ?? 0,
+    sync_events: syncEventsCount.value ?? 0,
+    storage_bytes: storageBytes.value ?? 0,
+    last_file_update_at: lastFileUpdate.value ?? null,
+    last_sync_at: lastSyncAt.value ?? null,
+  };
 }
 
 // Backup destination management
@@ -191,6 +307,12 @@ export default {
   upsertFile,
   insertVersion,
   listVersions,
+  listDevices,
+  getDevice,
+  upsertDevice,
+  touchDevice,
+  markDeviceSync,
+  listAdminStats,
   upsertBackupDestination,
   getBackupDestination,
   listBackupDestinations,

@@ -1,8 +1,14 @@
-FROM node:22-alpine
+FROM node:20-alpine
+
 WORKDIR /app
-COPY package.json tsconfig.json ./
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY tsconfig.json ./tsconfig.json
 COPY src ./src
-RUN npm install
+
 RUN npm run build
+
 EXPOSE 3000
-CMD ["npm", "run", "start"]
+CMD ["node", "dist/index.js"]

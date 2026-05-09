@@ -1,9 +1,16 @@
 import express from "express";
+import fs from "fs";
+import path from "path";
 import {
   getFile,
   insertVersion,
   listFiles,
+  listDevices,
+  listAdminStats,
   listVersions,
+  markDeviceSync,
+  touchDevice,
+  upsertDevice,
   upsertFile,
   listBackupDestinations,
   updateBackupLastTime,
@@ -35,6 +42,16 @@ type FileResponse = {
   content?: string;
 };
 
+type DeviceBody = {
+  id?: string;
+  name?: string;
+  platform?: string;
+  deviceType?: string;
+  model?: string;
+  lastSeen?: number;
+  lastSync?: number;
+};
+
 /**
  * Calculate SHA256 checksum of content
  */
@@ -44,8 +61,24 @@ function calculateChecksum(content: string): string {
 
 export function createApp() {
   const app = express();
+  const adminDistDir = path.resolve(process.cwd(), "admin/dist");
+  const adminIndexFile = path.join(adminDistDir, "index.html");
 
   app.use(express.json());
+
+  if (fs.existsSync(adminDistDir)) {
+    app.use("/admin", express.static(adminDistDir, { index: false, redirect: false }));
+    app.get("/admin", (_request, response) => {
+      response.sendFile(adminIndexFile);
+    });
+    app.get("/admin/*", (request, response, next) => {
+      if (request.path === "/admin/stats") {
+        next();
+        return;
+      }
+      response.sendFile(adminIndexFile);
+    });
+  }
 
   // Ensure vault directory exists on startup
   ensureVaultDir();
@@ -59,6 +92,10 @@ export function createApp() {
       name: "FreeVaultSync Server",
       status: "bootstrapped",
       endpoints: [
+        "/admin",
+        "/admin/stats",
+        "/devices",
+        "/devices/register",
         "/health",
         "/vault/files",
         "/vault/files/*",
@@ -223,6 +260,63 @@ export function createApp() {
     });
   });
 
+  app.get("/devices", (_request, response) => {
+    response.json({ devices: listDevices() });
+  });
+
+  app.post("/devices/register", (request, response) => {
+    const body = (request.body ?? {}) as DeviceBody;
+
+    if (!body.id) {
+      response.status(400).json({ error: "Missing device id" });
+      return;
+    }
+
+    const now = Date.now();
+    const deviceRow = {
+      id: body.id,
+      name: body.name ?? null,
+      platform: body.platform ?? null,
+      device_type: body.deviceType ?? null,
+      model: body.model ?? null,
+      last_seen: body.lastSeen ?? now,
+      last_sync: body.lastSync ?? null,
+    };
+
+    upsertDevice(deviceRow);
+
+    response.status(200).json({
+      status: "ok",
+      device: deviceRow,
+    });
+  });
+
+  app.post("/devices/:id/heartbeat", (request, response) => {
+    const deviceId = request.params.id;
+    const now = Date.now();
+
+    touchDevice(deviceId, now);
+
+    response.json({
+      status: "ok",
+      id: deviceId,
+      last_seen: now,
+    });
+  });
+
+  app.post("/devices/:id/sync", (request, response) => {
+    const deviceId = request.params.id;
+    const now = Date.now();
+
+    markDeviceSync(deviceId, now);
+
+    response.json({
+      status: "ok",
+      id: deviceId,
+      last_sync: now,
+    });
+  });
+
   // ========== BACKUP API ==========
 
   app.get("/api/backup/destinations", (_request, response) => {
@@ -333,6 +427,23 @@ export function createApp() {
     } catch (error) {
       response.status(500).json({ error: "Failed to get backup status" });
     }
+  });
+
+  app.get("/admin/stats", (_request, response) => {
+    const stats = listAdminStats();
+    response.json({
+      status: "ok",
+      stats: {
+        files: stats.files,
+        versions: stats.versions,
+        devices: stats.devices,
+        backup_destinations: stats.backup_destinations,
+        sync_events: stats.sync_events,
+        storage_bytes: stats.storage_bytes,
+        last_file_update_at: stats.last_file_update_at,
+        last_sync_at: stats.last_sync_at,
+      },
+    });
   });
 
   return app;

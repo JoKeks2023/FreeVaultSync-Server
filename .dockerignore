@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+.git
+data
+admin/dist
+admin/node_modules
+server/dist
+server/node_modules
