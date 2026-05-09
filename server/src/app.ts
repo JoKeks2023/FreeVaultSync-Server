@@ -40,9 +40,11 @@ export function createApp() {
   });
 
   const decodePathParam = (rawPath?: string) => decodeURIComponent(rawPath ?? "");
+  const getPathFromParams = (params: Record<string, string | undefined>) =>
+    decodePathParam(params.path ?? params["path(*)"]);
 
   app.get("/vault/files/:path(*)", (request, response) => {
-    const filePath = decodePathParam(request.params.path);
+    const filePath = getPathFromParams(request.params as Record<string, string | undefined>);
     if (!filePath) {
       response.status(400).json({ error: "Missing file path" });
       return;
@@ -58,7 +60,7 @@ export function createApp() {
   });
 
   app.put("/vault/files/:path(*)", (request, response) => {
-    const filePath = decodePathParam(request.params.path);
+    const filePath = getPathFromParams(request.params as Record<string, string | undefined>);
     const body = (request.body ?? {}) as PutFileBody;
 
     if (!filePath) {
@@ -101,7 +103,7 @@ export function createApp() {
   });
 
   app.get("/vault/history/:path(*)", (request, response) => {
-    const filePath = decodePathParam(request.params.path);
+    const filePath = getPathFromParams(request.params as Record<string, string | undefined>);
     if (!filePath) {
       response.status(400).json({ error: "Missing file path" });
       return;
